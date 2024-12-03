@@ -222,7 +222,7 @@ fun RegisterScreen(
         }
 
         TextButton(onClick = onNavigateToLogin) {
-            Text("Already have an account? Login")
+            Text("Already have an account? Login here")
         }
 
         viewModel.error?.let { error ->
