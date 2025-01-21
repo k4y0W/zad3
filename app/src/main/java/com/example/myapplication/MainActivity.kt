@@ -26,7 +26,6 @@ import kotlinx.coroutines.tasks.await
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.graphics.Color
-
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.border
 import androidx.compose.ui.text.style.TextAlign
@@ -34,6 +33,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.Image
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 
 data class ExchangeTransaction(
     val fromCurrency: String = "",
@@ -382,11 +383,11 @@ fun LoginScreen(
         )
 
         Spacer(modifier = Modifier.height(8.dp))
-
         OutlinedTextField(
             value = password,
             onValueChange = { password = it },
             label = { Text("Hasło") },
+            visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth()
         )
 
