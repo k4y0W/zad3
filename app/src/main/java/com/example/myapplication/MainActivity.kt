@@ -4,38 +4,52 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
-import kotlinx.coroutines.launch
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
-import androidx.compose.ui.unit.dp
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.rememberNavController
-import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation.compose.composable
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.graphics.Color
 
-// Model danych
-data class UserData(
-    val title: String = "",
-    val description: String = "",
-    val timestamp: Long = System.currentTimeMillis()
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.Image
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
+
+data class ExchangeTransaction(
+    val fromCurrency: String = "",
+    val toCurrency: String = "",
+    val amount: Double = 0.0,
+    val rate: Double = 0.0,
+    val result: Double = 0.0,
+    val timestamp: Long = System.currentTimeMillis(),
+    val userId: String = ""
 )
 
-// ViewModel
-class MainViewModel : ViewModel() {
+class ExchangeViewModel : ViewModel() {
     private val auth = FirebaseAuth.getInstance()
     private val db = FirebaseFirestore.getInstance()
 
-    var userData by mutableStateOf<UserData?>(null)
+    var transactions by mutableStateOf<List<ExchangeTransaction>>(emptyList())
         private set
 
     var isLoading by mutableStateOf(false)
@@ -46,6 +60,13 @@ class MainViewModel : ViewModel() {
 
     var isLoggedIn by mutableStateOf(auth.currentUser != null)
         private set
+
+    private val exchangeRates = mapOf(
+        "USD" to 4.0,
+        "EUR" to 4.35,
+        "GBP" to 5.05,
+        "CHF" to 4.45
+    )
 
     suspend fun signIn(email: String, password: String): Boolean {
         return try {
@@ -77,15 +98,36 @@ class MainViewModel : ViewModel() {
         }
     }
 
-    suspend fun saveData(title: String, description: String) {
+    suspend fun performExchange(fromCurrency: String, toCurrency: String, amount: Double) {
         try {
             isLoading = true
             error = null
-            val data = UserData(title, description)
+
+            val rate = when {
+                fromCurrency == "PLN" -> exchangeRates[toCurrency] ?: 1.0
+                toCurrency == "PLN" -> 1.0 / (exchangeRates[fromCurrency] ?: 1.0)
+                else -> (exchangeRates[toCurrency] ?: 1.0) / (exchangeRates[fromCurrency] ?: 1.0)
+            }
+
+            val result = amount * rate
+
+            val transaction = ExchangeTransaction(
+                fromCurrency = fromCurrency,
+                toCurrency = toCurrency,
+                amount = amount,
+                rate = rate,
+                result = result,
+                userId = auth.currentUser?.uid ?: ""
+            )
+
             auth.currentUser?.uid?.let { uid ->
                 db.collection("users").document(uid)
-                    .collection("data").add(data).await()
+                    .collection("transactions")
+                    .add(transaction)
+                    .await()
             }
+
+            loadTransactions()
         } catch (e: Exception) {
             error = e.message
         } finally {
@@ -93,18 +135,19 @@ class MainViewModel : ViewModel() {
         }
     }
 
-    suspend fun loadData() {
+    suspend fun loadTransactions() {
         try {
             isLoading = true
             error = null
             auth.currentUser?.uid?.let { uid ->
                 val snapshot = db.collection("users").document(uid)
-                    .collection("data")
-                    .orderBy("timestamp")
-                    .limit(1)
+                    .collection("transactions")
+                    .orderBy("timestamp", com.google.firebase.firestore.Query.Direction.DESCENDING)
                     .get()
                     .await()
-                userData = snapshot.documents.firstOrNull()?.toObject(UserData::class.java)
+                transactions = snapshot.documents.mapNotNull {
+                    it.toObject(ExchangeTransaction::class.java)
+                }
             }
         } catch (e: Exception) {
             error = e.message
@@ -116,14 +159,186 @@ class MainViewModel : ViewModel() {
     fun signOut() {
         auth.signOut()
         isLoggedIn = false
-        userData = null
+        transactions = emptyList()
     }
 }
 
-// Ekrany
+@Composable
+fun ExchangeScreen(viewModel: ExchangeViewModel) {
+    var fromCurrency by remember { mutableStateOf("PLN") }
+    var toCurrency by remember { mutableStateOf("EUR") }
+    var amount by remember { mutableStateOf("") }
+    var fromCurrencyExpanded by remember { mutableStateOf(false) }
+    var toCurrencyExpanded by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    val currencies = listOf("PLN", "EUR", "USD", "GBP", "CHF")
+
+    LaunchedEffect(Unit) {
+        viewModel.loadTransactions()
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            OutlinedTextField(
+                value = fromCurrency,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Z waluty") },
+                trailingIcon = {
+                    IconButton(onClick = { fromCurrencyExpanded = !fromCurrencyExpanded }) {
+                        Icon(
+                            imageVector = if (fromCurrencyExpanded)
+                                Icons.Default.KeyboardArrowUp
+                            else
+                                Icons.Default.KeyboardArrowDown,
+                            contentDescription = "Select currency"
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+            DropdownMenu(
+                expanded = fromCurrencyExpanded,
+                onDismissRequest = { fromCurrencyExpanded = false },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                currencies.forEach { currency ->
+                    DropdownMenuItem(
+                        text = { Text(currency) },
+                        onClick = {
+                            fromCurrency = currency
+                            fromCurrencyExpanded = false
+                        }
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Box(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            OutlinedTextField(
+                value = toCurrency,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Na walutę") },
+                trailingIcon = {
+                    IconButton(onClick = { toCurrencyExpanded = !toCurrencyExpanded }) {
+                        Icon(
+                            imageVector = if (toCurrencyExpanded)
+                                Icons.Default.KeyboardArrowUp
+                            else
+                                Icons.Default.KeyboardArrowDown,
+                            contentDescription = "Select currency"
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+            DropdownMenu(
+                expanded = toCurrencyExpanded,
+                onDismissRequest = { toCurrencyExpanded = false },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                currencies.forEach { currency ->
+                    DropdownMenuItem(
+                        text = { Text(currency) },
+                        onClick = {
+                            toCurrency = currency
+                            toCurrencyExpanded = false
+                        }
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = amount,
+            onValueChange = { if (it.isEmpty() || it.matches(Regex("^\\d*\\.?\\d*$"))) amount = it },
+            label = { Text("Kwota") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(
+            onClick = {
+                scope.launch {
+                    amount.toDoubleOrNull()?.let { amt ->
+                        viewModel.performExchange(fromCurrency, toCurrency, amt)
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = amount.isNotEmpty()
+        ) {
+            Text("Wymień walutę")
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text("Historia transakcji", style = MaterialTheme.typography.titleLarge)
+
+        LazyColumn(
+            modifier = Modifier.weight(1f)
+        ) {
+            items(viewModel.transactions) { transaction ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp)
+                    ) {
+                        Text(
+                            "${transaction.amount} ${transaction.fromCurrency} -> " +
+                                    "${String.format("%.2f", transaction.result)} ${transaction.toCurrency}"
+                        )
+                        Text(
+                            "Kurs: ${String.format("%.4f", transaction.rate)}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+        }
+
+        if (viewModel.isLoading) {
+            CircularProgressIndicator()
+        }
+
+        viewModel.error?.let { error ->
+            Text(error, color = MaterialTheme.colorScheme.error)
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(
+            onClick = { viewModel.signOut() },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Wyloguj się")
+        }
+    }
+}
+
 @Composable
 fun LoginScreen(
-    viewModel: MainViewModel,
+    viewModel: ExchangeViewModel,
     onNavigateToRegister: () -> Unit
 ) {
     var email by remember { mutableStateOf("") }
@@ -137,7 +352,29 @@ fun LoginScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        TextField(
+        Image(
+            painter = painterResource(id = R.drawable.icon),
+            contentDescription = "Logo Kantoru",
+            modifier = Modifier
+                .size(128.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .border(
+                    width = 2.dp,
+                    color = Color(0xFF6750A4),
+                    shape = RoundedCornerShape(16.dp)
+                )
+        )
+
+        Text(
+            text = "Zaloguj się!",
+            style = MaterialTheme.typography.titleLarge,
+            color = Color(0xFF6750A4),
+            modifier = Modifier
+                .padding(16.dp),
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
             value = email,
             onValueChange = { email = it },
             label = { Text("Email") },
@@ -146,28 +383,39 @@ fun LoginScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        TextField(
+        OutlinedTextField(
             value = password,
             onValueChange = { password = it },
-            label = { Text("Password") },
+            label = { Text("Hasło") },
             modifier = Modifier.fillMaxWidth()
         )
 
         Spacer(modifier = Modifier.height(16.dp))
 
         Button(
+
             onClick = {
+
                 scope.launch {
                     viewModel.signIn(email, password)
                 }
             },
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Login")
+            Text("Zaloguj się")
+
         }
 
-        TextButton(onClick = onNavigateToRegister) {
-            Text("Need an account? Register")
+        TextButton(
+
+            onClick = onNavigateToRegister
+        ) {
+            Text("Nie masz konta? Zarejestruj się")
+
+        }
+
+        if (viewModel.isLoading) {
+            CircularProgressIndicator()
         }
 
         viewModel.error?.let { error ->
@@ -178,7 +426,7 @@ fun LoginScreen(
 
 @Composable
 fun RegisterScreen(
-    viewModel: MainViewModel,
+    viewModel: ExchangeViewModel,
     onNavigateToLogin: () -> Unit
 ) {
     var email by remember { mutableStateOf("") }
@@ -192,7 +440,28 @@ fun RegisterScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        TextField(
+        Image(
+            painter = painterResource(id = R.drawable.icon),
+            contentDescription = "Logo Kantoru",
+            modifier = Modifier
+                .size(128.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .border(
+                    width = 2.dp,
+                    color = Color(0xFF6750A4),
+                    shape = RoundedCornerShape(16.dp)
+                )
+        )
+        Text(
+            text = "Zarejestruj sie!",
+            style = MaterialTheme.typography.titleLarge,
+            color = Color(0xFF6750A4),
+            modifier = Modifier
+                .padding(16.dp),
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
             value = email,
             onValueChange = { email = it },
             label = { Text("Email") },
@@ -201,10 +470,10 @@ fun RegisterScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        TextField(
+        OutlinedTextField(
             value = password,
             onValueChange = { password = it },
-            label = { Text("Password") },
+            label = { Text("Hasło") },
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -218,88 +487,13 @@ fun RegisterScreen(
             },
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Register")
+            Text("Zarejestruj się")
         }
 
-        TextButton(onClick = onNavigateToLogin) {
-            Text("Already have an account? Login here")
-        }
-
-        viewModel.error?.let { error ->
-            Text(error, color = MaterialTheme.colorScheme.error)
-        }
-    }
-}
-
-@Composable
-fun MainScreen(viewModel: MainViewModel) {
-    var title by remember { mutableStateOf("") }
-    var description by remember { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
-
-    LaunchedEffect(Unit) {
-        viewModel.loadData()
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        TextField(
-            value = title,
-            onValueChange = { title = it },
-            label = { Text("Title") },
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        TextField(
-            value = description,
-            onValueChange = { description = it },
-            label = { Text("Description") },
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(
-            onClick = {
-                scope.launch {
-                    viewModel.saveData(title, description)
-                    viewModel.loadData()
-                }
-            },
-            modifier = Modifier.fillMaxWidth()
+        TextButton(
+            onClick = onNavigateToLogin
         ) {
-            Text("Save Data")
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        viewModel.userData?.let { data ->
-            Card(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
-                ) {
-                    Text("Latest Data:", style = MaterialTheme.typography.titleMedium)
-                    Text("Title: ${data.title}")
-                    Text("Description: ${data.description}")
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(
-            onClick = { viewModel.signOut() },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Sign Out")
+            Text("Masz już konto? Zaloguj się")
         }
 
         if (viewModel.isLoading) {
@@ -319,11 +513,11 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 val navController = rememberNavController()
-                val viewModel: MainViewModel = viewModel()
+                val viewModel: ExchangeViewModel = viewModel()
 
                 NavHost(
                     navController = navController,
-                    startDestination = if (viewModel.isLoggedIn) "main" else "login"
+                    startDestination = if (viewModel.isLoggedIn) "exchange" else "login"
                 ) {
                     composable("login") {
                         LoginScreen(
@@ -337,19 +531,19 @@ class MainActivity : ComponentActivity() {
                             onNavigateToLogin = { navController.navigate("login") }
                         )
                     }
-                    composable("main") {
-                        MainScreen(viewModel = viewModel)
+                    composable("exchange") {
+                        ExchangeScreen(viewModel = viewModel)
                     }
                 }
 
                 LaunchedEffect(viewModel.isLoggedIn) {
                     if (viewModel.isLoggedIn) {
-                        navController.navigate("main") {
+                        navController.navigate("exchange") {
                             popUpTo("login") { inclusive = true }
                         }
                     } else {
                         navController.navigate("login") {
-                            popUpTo("main") { inclusive = true }
+                            popUpTo("exchange") { inclusive = true }
                         }
                     }
                 }
