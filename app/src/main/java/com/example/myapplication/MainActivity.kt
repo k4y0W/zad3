@@ -105,9 +105,9 @@ class ExchangeViewModel : ViewModel() {
             error = null
 
             val rate = when {
-                fromCurrency == "PLN" -> exchangeRates[toCurrency] ?: 1.0
-                toCurrency == "PLN" -> 1.0 / (exchangeRates[fromCurrency] ?: 1.0)
-                else -> (exchangeRates[toCurrency] ?: 1.0) / (exchangeRates[fromCurrency] ?: 1.0)
+                fromCurrency == "PLN" -> 1.0 / (exchangeRates[toCurrency] ?: 1.0)
+                toCurrency == "PLN" -> exchangeRates[fromCurrency] ?: 1.0
+                else -> (exchangeRates[fromCurrency] ?: 1.0) / (exchangeRates[toCurrency] ?: 1.0)
             }
 
             val result = amount * rate
